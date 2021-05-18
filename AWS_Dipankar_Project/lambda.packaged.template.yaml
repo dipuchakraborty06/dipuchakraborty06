@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Template to create AWS stack with S3 bucket events consumed by Lambda
+Parameters:
+  Environment:
+    Description: Parameter denoting environment where the stack is to be run
+    Type: String
+    Default: sit01
+    AllowedPattern: '[a-z][0-9a-z-]*[0-9a-z]'
+    MinLength: 5
+    MaxLength: 6
+  LogRetentionInDays:
+    Description: CloudWatch log stream retention in days
+    Type: Number
+    Default: 1
+Resources:
+  TestNotificationS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName:
+        Fn::Sub: ${Environment}-test-notification
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: aws:kms
+            KMSMasterKeyID: '{{resolve:ssm:/app/kms/core-cmk:1}}'
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-test-notification
+  TestNotificationLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Securtiy group for VPC endpoints
+      GroupName:
+        Fn::Sub: ${Environment}-TestNotificationLambdaSecurityGroup
+      VpcId: '{{resolve:ssm:/app/network/VpcId:1}}'
+      SecurityGroupEgress:
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        DestinationSecurityGroupId: '{{resolve:ssm:/app/network/core-vpc-endpoint-sg:1}}'
+        Description: All traffic to VPC Endpoint security group
+      SecurityGroupIngress:
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        CidrIp: '{{resolve:ssm:/app/network/VpCCidr:1}}'
+        Description: All traffic from VPC CIDR range
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCEndpointSecurityGroup
+  S3NotificationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: svc-${Environment}-s3-notification-lambda-role
+      Path: /
+      PermissionsBoundary:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/core-ServiceRolePermissionBoundary
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+      - PolicyName: s3_notification_lambda_policy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: AccessToEC2
+            Effect: Allow
+            Action:
+            - ec2:Describe*
+            - elasticloadbalancing:Describe*
+            - autoscaling:Describe*
+            - ec2:AttachNetworkInterface
+            Resource: '*'
+          - Sid: AccessToLambda
+            Effect: Allow
+            Action:
+            - lambda:GetFunction
+            - lambda:AddPermission
+            - lambda:InvokeFunction
+            - lambda:TagResource
+            - lambda:UpdateFunctionConfiguration
+            - lambda:PublishVersion
+            - lambda:RemovePermission
+            Resource: '*'
+          - Sid: AccessToCloudWatch
+            Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogGroups
+            - logs:PutRetentionPolicy
+            Resource: arn:aws:logs:*:*:*
+          - Sid: AccessToCMK
+            Effect: Allow
+            Action:
+            - kms:Encrypt
+            - kms:Decrypt
+            - kms:ReEncrypt
+            - kms:GenerateDataKey
+            - kms:GenerateDataKeyWithoutPlaintext
+            - kms:DescribeKey
+            Resource:
+            - '{{resolve:ssm:/app/kms/core-cmk:1}}'
+          - Sid: AccessToS3
+            Effect: Allow
+            Action:
+            - s3:GetObject
+            Resource:
+            - '{{resolve:ssm:/app/s3/core-bucket:1}}'
+            - Fn::Sub: arn:aws:s3:::${Environment}-corecfn-codebase/*
+            - Fn::GetAtt:
+              - TestNotificationS3Bucket
+              - Arn
+            - Fn::Sub: arn:aws:s3:::${Environment}-test-notification/*
+  AllowLambdaRoleTestNotificationBucket:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: TestNotificationS3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:PutObject
+          Resource:
+          - Fn::Sub: arn:aws:s3:::${Environment}-test-notification
+          - Fn::Sub: arn:aws:s3:::${Environment}-test-notification/*
+          Principal:
+            AWS:
+            - Fn::GetAtt:
+              - S3NotificationLambdaRole
+              - Arn
+  AllowLambdaRoleCoreCFNBucket:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: '{{resolve:ssm:/app/s3/core-bucket/id:1}}'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:PutObject
+          Resource:
+          - Fn::Sub: arn:aws:s3:::${Environment}-corecfn-codebase
+          - Fn::Sub: arn:aws:s3:::${Environment}-corecfn-codebase/*
+          Principal:
+            AWS:
+            - Fn::GetAtt:
+              - S3NotificationLambdaRole
+              - Arn
+  S3NotificationLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      MemorySize: 320
+      Timeout: 120
+      CodeUri: s3://sit01-corecfn-codebase/s3-notification-lambda/d30b7252478288e65f2682b8e536f95e
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.8
+      Role:
+        Fn::GetAtt:
+        - S3NotificationLambdaRole
+        - Arn
+      Description: Lambda function which gets triggered on S3 file put event
+      FunctionName:
+        Fn::Sub: svc-${Environment}-s3-notification-lambda
+      KmsKeyArn: '{{resolve:ssm:/app/kms/core-cmk:1}}'
+      PackageType: Zip
+      VpcConfig:
+        SecurityGroupIds:
+        - Ref: TestNotificationLambdaSecurityGroup
+        SubnetIds:
+        - '{{resolve:ssm:/app/network/Subnet1Id:1}}'
+        - '{{resolve:ssm:/app/network/Subnet2Id:1}}'
+        - '{{resolve:ssm:/app/network/Subnet3Id:1}}'
+      Environment:
+        Variables:
+          LAMBDA_FUNCTION_NAME:
+            Fn::Sub: svc-${Environment}-s3-notification-lambda
+          LOG_RETENTION_IN_DAYS:
+            Ref: LogRetentionInDays
+          CODE_S3_BUCKET:
+            Fn::Sub: ${Environment}-corecfn-codebase
+          KEY_PAIR_NAME: core-ec2-keypair.pem
+          ENVIRONMENT:
+            Ref: Environment
+  S3NotificationBucketLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - S3NotificationLambda
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount:
+        Ref: AWS::AccountId
+      SourceArn:
+        Fn::GetAtt:
+        - TestNotificationS3Bucket
+        - Arn
+  CoreCFNBucketLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - S3NotificationLambda
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount:
+        Ref: AWS::AccountId
+      SourceArn: '{{resolve:ssm:/app/s3/core-bucket:1}}'

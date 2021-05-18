@@ -1,0 +1,23 @@
+{
+    "LambdaFunctionConfigurations": [
+        {
+            "Id": "s3eventtriggerslambda",
+            "LambdaFunctionArn": "arn:aws:lambda:ap-southeast-1:568211590521:function:svc-sit01-s3-notification-lambda",
+            "Events": ["s3:ObjectCreated:*"],
+            "Filter": {
+                "Key": {
+                    "FilterRules": [
+                        {
+                            "Name": "prefix",
+                            "Value": "inbound/"
+                        },
+                        {
+                            "Name": "suffix",
+                            "Value": ".csv"
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}

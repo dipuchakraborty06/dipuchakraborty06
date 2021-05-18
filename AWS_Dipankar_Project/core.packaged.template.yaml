@@ -1,0 +1,527 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Template to create AWS stack with S3 bucket events consumed by Lambda
+Parameters:
+  Environment:
+    Description: Parameter denoting environment where the stack is to be run
+    Type: String
+    Default: sit01
+    AllowedPattern: '[a-z][0-9a-z-]*[0-9a-z]'
+    MinLength: 5
+    MaxLength: 6
+  VPCCIDRBlock:
+    Description: Paramter denoting VPC CIDR block which needs to be spinned up
+    Type: String
+    Default: 192.168.0.0/16
+  Subnet1CIDRBlock:
+    Description: CIDR block for Subnet 1 inside the VPC
+    Type: String
+    Default: 192.168.1.0/24
+  Subnet2CIDRBlock:
+    Description: CIDR block for Subnet 2 inside the VPC
+    Type: String
+    Default: 192.168.2.0/24
+  Subnet3CIDRBlock:
+    Description: CIDR block for Subnet 3 inside the VPC
+    Type: String
+    Default: 192.168.3.0/24
+  LogRetentionInDays:
+    Description: CloudWatch log stream retention in days
+    Type: Number
+    Default: 1
+Mappings:
+  EC2AMIMap:
+    ap-southeast-1:
+      AMI: ami-0d058fe428540cd89
+Resources:
+  CoreCFNVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Ref: VPCCIDRBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPC
+  AddParameterVPCID:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Ref: CoreCFNVPC
+      Name: /app/network/VpcId
+  AddParameterVPCCIDR:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Fn::GetAtt:
+        - CoreCFNVPC
+        - CidrBlock
+      Name: /app/network/VpCCidr
+  CoreCFNVPCInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCInternetGateway
+  CoreCFNVPCIGWAssociaion:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: CoreCFNVPC
+      InternetGatewayId:
+        Ref: CoreCFNVPCInternetGateway
+  CoreCFNVPCSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:
+        Ref: Subnet1CIDRBlock
+      VpcId:
+        Ref: CoreCFNVPC
+      AvailabilityZone:
+        Fn::Sub: ${AWS::Region}a
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCSubnet1
+  CoreCFNVPCSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:
+        Ref: Subnet2CIDRBlock
+      VpcId:
+        Ref: CoreCFNVPC
+      AvailabilityZone:
+        Fn::Sub: ${AWS::Region}b
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCSubnet2
+  CoreCFNVPCSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock:
+        Ref: Subnet3CIDRBlock
+      VpcId:
+        Ref: CoreCFNVPC
+      AvailabilityZone:
+        Fn::Sub: ${AWS::Region}c
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCSubnet3
+  AddParameterSubnet1:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Ref: CoreCFNVPCSubnet1
+      Name: /app/network/Subnet1Id
+  AddParameterSubnet2:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Ref: CoreCFNVPCSubnet2
+      Name: /app/network/Subnet2Id
+  AddParameterSubnet3:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Ref: CoreCFNVPCSubnet3
+      Name: /app/network/Subnet3Id
+  CoreCFNVPCRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: CoreCFNVPC
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCRouteTable
+  CoreCFNVPCIGWRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: CoreCFNVPCRouteTable
+      GatewayId:
+        Ref: CoreCFNVPCInternetGateway
+      DestinationCidrBlock: 0.0.0.0/0
+  CoreCFNVPCSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: CoreCFNVPCRouteTable
+      SubnetId:
+        Ref: CoreCFNVPCSubnet1
+  CoreCFNVPCSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: CoreCFNVPCRouteTable
+      SubnetId:
+        Ref: CoreCFNVPCSubnet2
+  CoreCFNVPCVPCSubnet3RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: CoreCFNVPCRouteTable
+      SubnetId:
+        Ref: CoreCFNVPCSubnet3
+  CoreCFNVPCBastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Securtiy group for bastion servers
+      GroupName:
+        Fn::Sub: ${Environment}-CoreCFNVPCBastionSecurityGroup
+      VpcId:
+        Ref: CoreCFNVPC
+      SecurityGroupEgress:
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        CidrIp: 0.0.0.0/0
+        Description: All traffic to internet
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        CidrIp:
+          Ref: VPCCIDRBlock
+        Description: All traffic to VPC CIDR range
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 103.42.159.151/32
+        Description: SSH access from specific ip to Bastion host
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        CidrIp:
+          Ref: VPCCIDRBlock
+        Description: All traffic from VPC CIDR range
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCBastionSecurityGroup
+  CoreCFNVPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Securtiy group for VPC endpoints
+      GroupName:
+        Fn::Sub: ${Environment}-CoreCFNVPCEndpointSecurityGroup
+      VpcId:
+        Ref: CoreCFNVPC
+      SecurityGroupEgress:
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        CidrIp:
+          Ref: VPCCIDRBlock
+        Description: All traffic to VPC CIDR range
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        CidrIp: 0.0.0.0/0
+        Description: All traffic to internet
+      SecurityGroupIngress:
+      - IpProtocol: '-1'
+        FromPort: -1
+        ToPort: -1
+        CidrIp:
+          Ref: VPCCIDRBlock
+        Description: All traffic from VPC CIDR range
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNVPCEndpointSecurityGroup
+  AddParameterVPCEndpointSecurityGroup:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Ref: CoreCFNVPCEndpointSecurityGroup
+      Name: /app/network/core-vpc-endpoint-sg
+  CoreCFNKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Core CMK KMS key for encryption
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNKMSKey
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id:
+          Fn::Sub: ${Environment}-corecfn-cmk
+        Statement:
+        - Sid: Enable IAM user permissions
+          Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
+          Action: kms:*
+          Resource: '*'
+        - Sid: Allow access for key administrators
+          Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/core-CloudFormationStackAdminRole
+          Action:
+          - kms:Create*
+          - kms:Describe*
+          - kms:Enable*
+          - kms:List*
+          - kms:Put*
+          - kms:Update*
+          - kms:Revoke*
+          - kms:Disable*
+          - kms:Get*
+          - kms:Delete*
+          - kms:TagResource
+          - kms:UntagResource
+          - kms:ScheduleKeyDeleteion
+          - kms:CancelKeyDeletion
+          Resource: '*'
+          Condition:
+            Bool:
+              kms:GrantIsForAWSResource: true
+        - Sid: Allow use of the CMK KMS key
+          Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/core-CloudFormationStackAdminRole
+          Action:
+          - kms:Encrypt
+          - kms:Decrypt
+          - kms:ReEncrypt
+          - kms:GenerateDataKey
+          - kms:GenerateDataKeyWithoutPlaintext
+          - kms:DescribeKey
+          Resource: '*'
+          Condition:
+            Bool:
+              kms:GrantIsForAWSResource: true
+        - Sid: Allow use of the CMK KMS key for cfn_user
+          Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:user/cfn_user
+          Action:
+          - kms:Encrypt
+          - kms:Decrypt
+          - kms:ReEncrypt
+          - kms:GenerateDataKey
+          - kms:GenerateDataKeyWithoutPlaintext
+          - kms:DescribeKey
+          Resource: '*'
+        - Sid: Allow attachment of persistant resources
+          Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/core-CloudFormationStackAdminRole
+          Action:
+          - kms:CreateGrant
+          - kms:ListGrants
+          - kms:RevokeGrant
+          Resource: '*'
+          Condition:
+            Bool:
+              kms:GrantIsForAWSResource: 'true'
+  CoreCFNKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName:
+        Fn::Sub: alias/cms-${Environment}-CoreCFNKMSKey
+      TargetKeyId:
+        Ref: CoreCFNKMSKey
+  AddParameterCMKKMSKeyARN:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Fn::GetAtt:
+        - CoreCFNKMSKey
+        - Arn
+      Name: /app/kms/core-cmk
+  CoreCFNBastionEc2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: svc-${Environment}-bastion-ec2-role
+      PermissionsBoundary:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/core-ServiceRolePermissionBoundary
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: CoreCFNBastionEC2ReadOnlyPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ec2:Describe*
+            - autoscaling:Describe*
+            - elasticloadbalancing:Describe*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - cloudwatch:ListMetrics
+            - cloudwatch:GetMetricStatistics
+            - cloudwatch:Describe*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogGroups
+            - logs:PutRetentionPolicy
+            Resource: arn:aws:logs:*:*:*
+          - Effect: Allow
+            Action:
+            - kms:Encrypt
+            - kms:Decrypt
+            Resource:
+            - Fn::GetAtt:
+              - CoreCFNKMSKey
+              - Arn
+  CoreCFNS3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:
+        Fn::Sub: com.amazonaws.${AWS::Region}.s3
+      VpcId:
+        Ref: CoreCFNVPC
+      RouteTableIds:
+      - Ref: CoreCFNVPCRouteTable
+      VpcEndpointType: Gateway
+  AddParameterCoreCFNS3VPCEndpoint:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Ref: CoreCFNS3VPCEndpoint
+      Name: /app/newwork/s3-vpc-endpoint
+  CoreCFNEC2VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName:
+        Fn::Sub: com.amazonaws.${AWS::Region}.ec2
+      VpcId:
+        Ref: CoreCFNVPC
+      VpcEndpointType: Interface
+      SecurityGroupIds:
+      - Ref: CoreCFNVPCEndpointSecurityGroup
+      SubnetIds:
+      - Ref: CoreCFNVPCSubnet1
+      - Ref: CoreCFNVPCSubnet2
+      - Ref: CoreCFNVPCSubnet3
+      PrivateDnsEnabled: true
+  CoreCFNS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName:
+        Fn::Sub: ${Environment}-corecfn-codebase
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: aws:kms
+            KMSMasterKeyID:
+              Fn::GetAtt:
+              - CoreCFNKMSKey
+              - Arn
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-corecfn-codebase
+  AddParameterCoreS3BucketARN:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Fn::GetAtt:
+        - CoreCFNS3Bucket
+        - Arn
+      Name: /app/s3/core-bucket
+  AddParameterCoreS3BucketId:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Value:
+        Ref: CoreCFNS3Bucket
+      Name: /app/s3/core-bucket/id
+  CoreCFNEC2LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName:
+        Fn::Sub: ${Environment}-corecfn-launchtemplate
+      LaunchTemplateData:
+        DisableApiTermination: false
+        EbsOptimized: true
+        InstanceType: t2.micro
+        KeyName: core-ec2-keypair
+        ImageId:
+          Fn::FindInMap:
+          - EC2AMIMap
+          - Ref: AWS::Region
+          - AMI
+        InstanceInitiatedShutdownBehavior: stop
+        TagSpecifications:
+        - ResourceType: instance
+          Tags:
+          - Key: Environment
+            Value:
+              Fn::Sub: ${Environment}
+          - Key: LaunchTemplate
+            Value:
+              Fn::Sub: ${Environment}-corecfn-launchtemplate
+  CoreCFNEC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+      - Ref: CoreCFNBastionEc2Role
+  CoreCFNBastionEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile:
+        Ref: CoreCFNEC2InstanceProfile
+      LaunchTemplate:
+        LaunchTemplateId:
+          Ref: CoreCFNEC2LaunchTemplate
+        Version:
+          Fn::GetAtt:
+          - CoreCFNEC2LaunchTemplate
+          - LatestVersionNumber
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: 'true'
+        DeviceIndex: '0'
+        GroupSet:
+        - Ref: CoreCFNVPCBastionSecurityGroup
+        SubnetId:
+          Ref: CoreCFNVPCSubnet1
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-CoreCFNBastionEC2Instance
+      - Key: Usage
+        Value: Internet facing bastion instance
